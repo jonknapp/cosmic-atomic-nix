@@ -1,0 +1,26 @@
+FROM quay.io/fedora-ostree-desktops/cosmic-atomic:45
+
+# Install Nix from Fedora's RPMs. The packages provide the daemon units,
+# nixbld users (sysusers), nix.conf with flakes, and tmpfiles for
+# daemon-socket, builds, and log dirs. The RPMs' /nix contents are hidden
+# by the bind mount at boot, so remove them along with DNF leftovers.
+RUN dnf -y install nix nix-daemon && \
+    dnf clean all && \
+    mkdir -p /nix && \
+    rm -rf /nix/* /run/dnf /var/log/dnf5.log /var/cache/libdnf5 \
+           /var/cache/ldconfig/aux-cache /var/lib/dnf && \
+    systemctl enable nix-daemon.socket
+
+# Create /var/nix at boot, then bind-mount it onto /nix
+COPY nix-var-dir.service /usr/lib/systemd/system/nix-var-dir.service
+COPY nix.mount /usr/lib/systemd/system/nix.mount
+COPY nix-tmpfiles.conf /usr/lib/tmpfiles.d/nix.conf
+RUN systemctl enable nix.mount
+
+# SELinux: label /nix like /usr so Nix-built binaries can run,
+# but label the daemon socket directory as var_run_t so systemd can create the socket
+RUN semanage fcontext -a -e /usr /nix && \
+    semanage fcontext -a -e /usr /var/nix && \
+    semanage fcontext -a -t var_run_t '/usr/var/nix/daemon-socket(/.*)?'
+
+RUN bootc container lint
