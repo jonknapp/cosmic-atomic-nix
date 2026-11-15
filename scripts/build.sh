@@ -42,7 +42,7 @@ sudo podman build --pull=always \
 
 if [[ "${push}" -eq 0 ]]; then
   printf '\nBuilt %s (not pushed or signed)\n' "${image}"
-  printf 'Rebase the host with:\n  sudo rpm-ostree rebase ostree-unverified-image:containers-storage:%s\n' "${image}"
+  printf 'Rebase the host with:\n  rpm-ostree rebase ostree-unverified-image:containers-storage:%s\n' "${image}"
   exit 0
 fi
 
@@ -53,18 +53,18 @@ trap 'rm -f "${digestfile}"' EXIT
 sudo podman push "${image}" --digestfile "${digestfile}"
 digest="$(cat "${digestfile}")"
 
-# Signs the pushed digest without a transparency log entry, so verify skips
-# the Rekor lookup. Log in first, once: cosign login ghcr.io
+# Signs the pushed digest and records the signature in the public Rekor
+# transparency log, so every use of the key is auditable. Log in first, once:
+# cosign login ghcr.io
 #
 # cosign 3 turned on the new bundle format and the TUF signing config by
 # default. Both are turned back off here: the signature has to be a legacy
-# `sha256-<digest>.sig` attachment for skopeo/bootc to find it, and
-# --tlog-upload=false is rejected while a signing config is in use. The flags
-# are the defaults on cosign 2.6.x, so the same command works on both.
+# `sha256-<digest>.sig` attachment for skopeo/bootc to find it. CI runs this
+# same cosign (from the flake) with the same flags.
 cosign sign --key cosign.key \
-  --tlog-upload=false --use-signing-config=false --new-bundle-format=false \
+  --use-signing-config=false --new-bundle-format=false \
   "${image_repo}@${digest}"
-cosign verify --key container/cosign.pub --insecure-ignore-tlog=true "${image_repo}@${digest}"
+cosign verify --key container/cosign.pub "${image_repo}@${digest}"
 
 printf '\nSigned %s@%s\n' "${image_repo}" "${digest}"
-printf 'Rebase the host with:\n  sudo rpm-ostree rebase ostree-image-signed:docker://%s:%s\n' "${image_repo}" "${tag}"
+printf 'Rebase the host with:\n  rpm-ostree rebase ostree-image-signed:docker://%s:%s\n' "${image_repo}" "${tag}"

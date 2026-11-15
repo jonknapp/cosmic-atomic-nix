@@ -1,5 +1,7 @@
 name: build
 
+# Only scheduled and manual runs. Never add pull_request_target here: it would
+# run fork-controlled code with access to the signing key.
 on:
   schedule:
     - cron: "0 4 * * *"
@@ -16,22 +18,48 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Keep COSIGN_PRIVATE_KEY / COSIGN_PASSWORD in a GitHub Environment named
+    # `release` that is restricted to the main branch (Settings > Environments),
+    # so a workflow edited on another branch and run via workflow_dispatch
+    # cannot read the signing key.
+    environment: release
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned to commit SHAs (not mutable tags) because they run
+      # before the signing step and could tamper with the cosign binary that
+      # later has the private key in its environment. Dependabot keeps the pins
+      # current.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       # GHCR requires lowercase repository names.
       - name: Set image repo
         run: |
-          repo="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
-          echo "IMAGE_REPO=ghcr.io/${repo}" >> "${GITHUB_ENV}"
+          echo "IMAGE_REPO=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_ENV}"
 
-      # Pinned for reproducible CI. The sign step passes the format flags
-      # explicitly, so cosign 2.6.x and 3.x produce the same legacy .sig
-      # attachment that skopeo/bootc read.
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+      # cosign comes from the flake, so CI and local builds use the exact same
+      # binary; flake.lock is the single place its version is pinned. Nix
+      # verifies the cache.nixos.org signature on the store path it fetches.
+      - name: Install Nix
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
-          cosign-release: v2.6.2
+          extra_nix_config: experimental-features = nix-command flakes
+
+      - name: Put cosign from the flake on PATH
+        run: |
+          out="$(nix build --no-link --print-out-paths .#cosign)"
+          "${out}/bin/cosign" version
+          echo "${out}/bin" >> "${GITHUB_PATH}"
+
+      # Fail before anything is pushed if the CI private key does not match
+      # the public key baked into the image; otherwise `latest` would be
+      # overwritten with an image that signed clients cannot verify.
+      - name: Check signing key matches container/cosign.pub
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          diff -w -B <(cosign public-key --key env://COSIGN_PRIVATE_KEY) container/cosign.pub
 
       - name: Log in to GHCR
         env:
@@ -47,23 +75,40 @@ jobs:
             --build-arg "IMAGE_REPO=${IMAGE_REPO}" \
             -t "${IMAGE_REPO}:latest" container/
 
+      # The policy inside the image must require a signature for exactly the
+      # repository it is published to. A mismatch (e.g. a typo in IMAGE_REPO)
+      # would otherwise fall through to the transport-wide
+      # insecureAcceptAnything rule and look verified while being unsigned.
+      - name: Check image policy covers IMAGE_REPO
+        run: |
+          podman run --rm "${IMAGE_REPO}:latest" cat /etc/containers/policy.json \
+            | jq -e --arg repo "${IMAGE_REPO}" \
+                '.default[0].type == "reject"
+                 and .transports.docker[$repo][0].type == "sigstoreSigned"
+                 and .transports.docker[$repo][0].keyPath == "/etc/pki/containers/cosign.pub"'
+
       - name: Push image
         id: push
         run: |
           podman push "${IMAGE_REPO}:latest" --digestfile digest.txt
           echo "digest=$(cat digest.txt)" >> "${GITHUB_OUTPUT}"
 
+      # The signature is uploaded to the public Rekor transparency log so that
+      # every use of the key is auditable; verification with just the public
+      # key does not depend on it. --use-signing-config/--new-bundle-format are
+      # off so skopeo/bootc find the legacy .sig attachment (see README).
       - name: Sign image
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           cosign sign --key env://COSIGN_PRIVATE_KEY \
-            --tlog-upload=false --use-signing-config=false --new-bundle-format=false \
-            "${IMAGE_REPO}@${{ steps.push.outputs.digest }}"
+            --use-signing-config=false --new-bundle-format=false \
+            "${IMAGE_REPO}@${DIGEST}"
 
-      # Signed without a transparency log entry, so skip the Rekor lookup.
       - name: Verify signature
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
         run: |
-          cosign verify --key container/cosign.pub --insecure-ignore-tlog=true \
-            "${IMAGE_REPO}@${{ steps.push.outputs.digest }}"
+          cosign verify --key container/cosign.pub "${IMAGE_REPO}@${DIGEST}"
