@@ -23,4 +23,15 @@ RUN semanage fcontext -a -e /usr /nix && \
     semanage fcontext -a -e /usr /var/nix && \
     semanage fcontext -a -t var_run_t '/usr/var/nix/daemon-socket(/.*)?'
 
+# Verify signed OS images via cosign and containers-policy. IMAGE_REPO must
+# match the published repository, e.g. ghcr.io/owner/cosmic-atomic-nix.
+# The rule is merged into the base image's policy.json, so Fedora's existing
+# entries (default, Red Hat registry signatures, etc.) are kept.
+ARG IMAGE_REPO=ghcr.io/CHANGE_ME/cosmic-atomic-nix
+COPY cosign.pub /etc/pki/containers/cosign.pub
+COPY registries.d.yaml /etc/containers/registries.d/cosmic-atomic-nix.yaml
+COPY containers-policy.json merge-policy.py /tmp/policy/
+RUN python3 /tmp/policy/merge-policy.py "${IMAGE_REPO}" /tmp/policy/containers-policy.json && \
+    rm -rf /tmp/policy
+
 RUN bootc container lint

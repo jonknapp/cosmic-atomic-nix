@@ -6,9 +6,10 @@ package manager added.
 ## What it is
 
 The image starts from `quay.io/fedora-ostree-desktops/cosmic-atomic:45` and
-installs Nix from Fedora's RPMs (`nix`, `nix-daemon`). It is meant to be built
-with `podman` and rebased onto with `rpm-ostree`, giving an immutable Fedora
-desktop that also has Nix available.
+installs Nix from Fedora's RPMs (`nix`, `nix-daemon`). It is built with
+`podman`, published to GitHub Container Registry, signed with cosign, and
+rebased onto with `rpm-ostree`, giving an immutable Fedora desktop that also has
+Nix available.
 
 ## How it works
 
@@ -31,45 +32,148 @@ at boot:
 The `nix-daemon.socket` is enabled by the RPMs, and `bootc container lint`
 validates the resulting image.
 
-## Layout
+## Signing and verification
 
-```
-container/
-  Containerfile          # image definition
-  nix.mount              # bind mount /var/nix -> /nix
-  nix-var-dir.service    # create /var/nix at boot
-  nix-tmpfiles.conf      # store/profile/gcroots directories
-scripts/
-  build.sh               # build the image with podman
-```
+Images are signed with cosign using a keypair. The private key stays offline (a
+GitHub secret); the public key is committed and baked into the image.
 
-## Building
+`flake.nix` pins cosign from nixpkgs unstable, so no system install is needed:
+`nix run .#cosign -- <args>` runs it, `nix develop` puts it on `PATH`.
 
-Run from the project root:
+Generate the keypair once, from the project root:
 
 ```sh
-scripts/build.sh
+nix run .#cosign -- generate-key-pair
+cp cosign.pub container/cosign.pub
 ```
 
-This runs:
+Commit `container/cosign.pub` and add two GitHub Actions secrets from
+`cosign.key`:
+
+- `COSIGN_PRIVATE_KEY` — the contents of `cosign.key`
+- `COSIGN_PASSWORD` — the passphrase you set
+
+`cosign.key` is gitignored and must never be committed.
+
+The image ships:
+
+- `/etc/pki/containers/cosign.pub` — the trusted verification key.
+- `/etc/containers/policy.json` — the base image's policy with one rule added:
+  a valid signature is required for the published OS repository. Fedora's
+  existing entries (default and Red Hat registry rules) are kept. Fedora 45
+  ships its default policy as `/usr/share/containers/policy.json` and no
+  longer creates the `/etc` copy, so `merge-policy.py` reads whichever of the
+  two exists and always writes `/etc/containers/policy.json`.
+- `/etc/containers/registries.d/cosmic-atomic-nix.yaml` — enables reading
+  cosign signature attachments.
+
+Verify manually with:
 
 ```sh
-sudo podman build --pull=always -t localhost/fedora/45/cosmic-atomic-nix:latest container/
+nix run .#cosign -- verify --key cosign.pub --insecure-ignore-tlog=true \
+  ghcr.io/OWNER/REPO:latest
 ```
 
-`sudo` is needed so `rpm-ostree` can access the image in root's container
-storage.
+Images are signed without a transparency log entry (`--tlog-upload=false`),
+so `--insecure-ignore-tlog=true` is needed to skip the Rekor lookup.
+
+### cosign 3 flags
+
+`build.sh` and CI sign with three flags that look redundant but are not:
+
+```sh
+cosign sign --key cosign.key \
+  --tlog-upload=false --use-signing-config=false --new-bundle-format=false \
+  ghcr.io/OWNER/REPO@sha256:...
+```
+
+- `--new-bundle-format=false` keeps the signature as a legacy
+  `sha256-<digest>.sig` attachment. cosign 3 defaults this to true and stores
+  the signature as an OCI 1.1 referring artifact instead, which skopeo (and so
+  `rpm-ostree`/`bootc`) does not look for: the rebase then fails with
+  "A signature was required, but no signature exists".
+- `--use-signing-config=false` disables the TUF-provided signing config that
+  cosign 3 enables by default; with it on, cosign rejects `--tlog-upload=false`.
+- Both default to false on cosign 2.6.x, so the same command works there and
+  in CI, which pins cosign v2.6.2.
+
+Verification needs neither flag — cosign 3 reads legacy attachments fine.
+
+cosign 3.1 warns that `--new-bundle-format` is deprecated and that the new
+format will eventually be the only one, so this setup needs revisiting once
+the containers stack reads OCI 1.1 referring artifacts.
+
+## CI
+
+`.github/workflows/build.yml` builds, pushes, and signs the image:
+
+- Runs daily at 04:00 UTC and on demand (`workflow_dispatch`).
+- `--pull=always` rebuilds on the newest `cosmic-atomic:45` base each run.
+- Pushes to `ghcr.io/<owner>/<repo>` and signs the pushed digest.
+
+## Building locally
+
+`build.sh` calls `cosign` from `PATH`, so run it inside the dev shell:
+
+```sh
+nix develop                 # cosign on PATH
+sudo podman login ghcr.io   # once, for the push
+cosign login ghcr.io        # once, for signing
+IMAGE_REPO=ghcr.io/OWNER/REPO scripts/build.sh
+```
+
+`build.sh` builds, pushes, signs the pushed digest, and prints the rebase
+command. `sudo` is needed so `rpm-ostree` can use the image from root's
+container storage.
+
+To build without pushing or signing (only `container/cosign.pub` is needed):
+
+```sh
+IMAGE_REPO=ghcr.io/OWNER/REPO scripts/build.sh --no-push
+sudo rpm-ostree rebase ostree-unverified-image:containers-storage:ghcr.io/OWNER/REPO:latest
+```
 
 ## Installing / switching to the image
 
+The policy and public key live inside the image, so bootstrap in two steps:
+first install unsigned to get them onto the host, then switch to the verified
+transport.
+
 ```sh
-sudo rpm-ostree rebase ostree-unverified-image:containers-storage:localhost/fedora/45/cosmic-atomic-nix:latest
+sudo rpm-ostree rebase ostree-unverified-image:docker://ghcr.io/OWNER/REPO:latest
+sudo systemctl reboot
+
+sudo rpm-ostree rebase ostree-image-signed:docker://ghcr.io/OWNER/REPO:latest
 sudo systemctl reboot
 ```
 
-To pick up later builds:
+`/etc` goes through ostree's 3-way merge. If `/etc/containers/policy.json`
+was edited locally on the host, the image's version is not applied and the
+signed rebase fails with no policy for the repository. Check with
+`grep OWNER/REPO /etc/containers/policy.json` before the second rebase, and
+add the rule by hand (see `container/containers-policy.json`) if it's missing.
+
+Later updates are verified automatically:
 
 ```sh
 sudo rpm-ostree upgrade
 sudo systemctl reboot
+```
+
+## Layout
+
+```
+.github/workflows/build.yml  # daily + on-demand build, push, sign
+flake.nix                    # cosign from nixpkgs (nix run .#cosign, nix develop)
+container/
+  Containerfile              # image definition
+  cosign.pub                 # trusted public key (generated, committed)
+  containers-policy.json     # signature rule for IMAGE_REPO (fragment)
+  merge-policy.py            # merges the rule into the base policy.json at build
+  registries.d.yaml          # cosign attachment lookup for ghcr.io
+  nix.mount                  # bind mount /var/nix -> /nix
+  nix-var-dir.service        # create /var/nix at boot
+  nix-tmpfiles.conf          # store/profile/gcroots directories
+scripts/
+  build.sh                   # build, push, sign locally
 ```

@@ -1,0 +1,15 @@
+{
+  "transports": {
+    "docker": {
+      "@IMAGE_REPO@": [
+        {
+          "type": "sigstoreSigned",
+          "keyPath": "/etc/pki/containers/cosign.pub",
+          "signedIdentity": {
+            "type": "matchRepository"
+          }
+        }
+      ]
+    }
+  }
+}
