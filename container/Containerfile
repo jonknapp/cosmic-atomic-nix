@@ -26,7 +26,9 @@ RUN semanage fcontext -a -e /usr /nix && \
 # Verify signed OS images via cosign and containers-policy. IMAGE_REPO must
 # match the published repository, e.g. ghcr.io/owner/cosmic-atomic-nix.
 # The rule is merged into the base image's policy.json, so Fedora's existing
-# entries (default, Red Hat registry signatures, etc.) are kept.
+# entries (Red Hat registry signatures, etc.) are kept. The default becomes
+# `reject` (required by ostree-image-signed), with "" rules that still accept
+# anything from registries (docker) and local storage (containers-storage).
 ARG IMAGE_REPO=ghcr.io/CHANGE_ME/cosmic-atomic-nix
 COPY cosign.pub /etc/pki/containers/cosign.pub
 COPY registries.d.yaml /etc/containers/registries.d/cosmic-atomic-nix.yaml

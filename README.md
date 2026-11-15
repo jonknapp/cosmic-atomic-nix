@@ -149,9 +149,23 @@ sudo systemctl reboot
 
 `/etc` goes through ostree's 3-way merge. If `/etc/containers/policy.json`
 was edited locally on the host, the image's version is not applied and the
-signed rebase fails with no policy for the repository. Check with
-`grep OWNER/REPO /etc/containers/policy.json` before the second rebase, and
-add the rule by hand (see `container/containers-policy.json`) if it's missing.
+signed rebase fails. The image's pristine copy is in `/usr/etc`, so after
+booting the unsigned image, reset the live file to it:
+
+```sh
+sudo cp /usr/etc/containers/policy.json /etc/containers/policy.json
+```
+
+The signed rebase also requires the policy's top-level `default` to be
+something other than `insecureAcceptAnything`; otherwise it fails with
+`containers-policy.json specifies a default of insecureAcceptAnything;
+refusing usage`. The image sets it to `reject`, and accepts anything else only
+for the `docker` (registry pulls) and `containers-storage` (local images)
+transports. Other transports, like `podman load` from `docker-archive:` or
+`oci-archive:`, are rejected. Rootless podman reads
+`~/.config/containers/policy.json` in place of the system file if it exists,
+so create one if you need those. Check with
+`grep -A3 '"default"' /etc/containers/policy.json` before the second rebase.
 
 Later updates are verified automatically:
 
