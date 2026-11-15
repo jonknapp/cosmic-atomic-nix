@@ -99,10 +99,14 @@ was enabled need `--insecure-ignore-tlog=true` to verify.
 `build.sh` and CI sign with two flags that turn off cosign 3 defaults:
 
 ```sh
-cosign sign --key cosign.key \
+cosign sign --yes --key cosign.key \
   --use-signing-config=false --new-bundle-format=false \
   ghcr.io/OWNER/REPO@sha256:...
 ```
+
+`--yes` accepts the Rekor immutable-record terms that cosign otherwise asks
+for interactively (the entry is the image digest and the public key). The
+"`--new-bundle-format` has been deprecated" warning is expected; see below.
 
 - `--new-bundle-format=false` keeps the signature as a legacy
   `sha256-<digest>.sig` attachment. cosign 3 defaults this to true and stores

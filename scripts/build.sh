@@ -54,14 +54,16 @@ sudo podman push "${image}" --digestfile "${digestfile}"
 digest="$(cat "${digestfile}")"
 
 # Signs the pushed digest and records the signature in the public Rekor
-# transparency log, so every use of the key is auditable. Log in first, once:
+# transparency log, so every use of the key is auditable. --yes accepts
+# Rekor's immutable-record terms non-interactively (the entry contains the
+# image digest and public key, nothing personal). Log in first, once:
 # cosign login ghcr.io
 #
 # cosign 3 turned on the new bundle format and the TUF signing config by
 # default. Both are turned back off here: the signature has to be a legacy
 # `sha256-<digest>.sig` attachment for skopeo/bootc to find it. CI runs this
 # same cosign (from the flake) with the same flags.
-cosign sign --key cosign.key \
+cosign sign --yes --key cosign.key \
   --use-signing-config=false --new-bundle-format=false \
   "${image_repo}@${digest}"
 cosign verify --key container/cosign.pub "${image_repo}@${digest}"
