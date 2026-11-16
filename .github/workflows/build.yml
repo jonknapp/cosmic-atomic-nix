@@ -51,6 +51,13 @@ jobs:
           "${out}/bin/cosign" version
           echo "${out}/bin" >> "${GITHUB_PATH}"
 
+      # Verify the upstream base image is signed by Fedora's unofficial Atomic
+      # Desktops CI (quay.io/fedora-ostree-desktops), before building on it.
+      - name: Verify base image signature
+        run: |
+          cosign verify --key container/quay-fedora-ostree-desktops.pub \
+            quay.io/fedora-ostree-desktops/cosmic-atomic:45
+
       # Fail before anything is pushed if the CI private key does not match
       # the public key baked into the image; otherwise `latest` would be
       # overwritten with an image that signed clients cannot verify.
@@ -76,16 +83,18 @@ jobs:
             -t "${IMAGE_REPO}:latest" container/
 
       # The policy inside the image must require a signature for exactly the
-      # repository it is published to. A mismatch (e.g. a typo in IMAGE_REPO)
-      # would otherwise fall through to the transport-wide
-      # insecureAcceptAnything rule and look verified while being unsigned.
-      - name: Check image policy covers IMAGE_REPO
+      # repository it is published to and trust the signed Quay base image.
+      # A mismatch would fall through to the transport-wide insecureAcceptAnything
+      # rule and look verified while being unsigned.
+      - name: Check image policy covers image and base repos
         run: |
           podman run --rm "${IMAGE_REPO}:latest" cat /etc/containers/policy.json \
             | jq -e --arg repo "${IMAGE_REPO}" \
                 '.default[0].type == "reject"
                  and .transports.docker[$repo][0].type == "sigstoreSigned"
-                 and .transports.docker[$repo][0].keyPath == "/etc/pki/containers/cosign.pub"'
+                 and .transports.docker[$repo][0].keyPath == "/etc/pki/containers/cosign.pub"
+                 and .transports.docker["quay.io/fedora-ostree-desktops"][0].type == "sigstoreSigned"
+                 and .transports.docker["quay.io/fedora-ostree-desktops"][0].keyPath == "/etc/pki/containers/quay-fedora-ostree-desktops.pub"'
 
       - name: Push image
         id: push

@@ -1,3 +1,5 @@
 docker:
   ghcr.io:
     use-sigstore-attachments: true
+  quay.io/fedora-ostree-desktops:
+    use-sigstore-attachments: true

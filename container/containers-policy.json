@@ -6,6 +6,15 @@
   ],
   "transports": {
     "docker": {
+      "quay.io/fedora-ostree-desktops": [
+        {
+          "type": "sigstoreSigned",
+          "keyPath": "/etc/pki/containers/quay-fedora-ostree-desktops.pub",
+          "signedIdentity": {
+            "type": "matchRepository"
+          }
+        }
+      ],
       "@IMAGE_REPO@": [
         {
           "type": "sigstoreSigned",

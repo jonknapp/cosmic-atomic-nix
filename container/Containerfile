@@ -29,8 +29,9 @@ RUN semanage fcontext -a -e /usr /nix && \
 # entries (Red Hat registry signatures, etc.) are kept. The default becomes
 # `reject` (required by ostree-image-signed), with "" rules that still accept
 # anything from registries (docker) and local storage (containers-storage).
+# Trust the unofficial Fedora Atomic Desktops CI key for the Quay base image.
 ARG IMAGE_REPO=ghcr.io/CHANGE_ME/cosmic-atomic-nix
-COPY cosign.pub /etc/pki/containers/cosign.pub
+COPY cosign.pub quay-fedora-ostree-desktops.pub /etc/pki/containers/
 COPY registries.d.yaml /etc/containers/registries.d/cosmic-atomic-nix.yaml
 COPY containers-policy.json merge-policy.py /tmp/policy/
 RUN python3 /tmp/policy/merge-policy.py "${IMAGE_REPO}" /tmp/policy/containers-policy.json && \
