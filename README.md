@@ -287,3 +287,8 @@ container/
 scripts/
   build.sh                   # build, push, sign locally
 ```
+
+## Additional Info
+
+- [Unofficial CI-Test Builds (OCI Image)](https://gitlab.com/fedora/ostree/ci-test)
+- [Configuration used to build the Fedora Atomic Desktops](https://forge.fedoraproject.org/atomic-desktops/config)
