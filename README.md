@@ -206,12 +206,20 @@ needed. The tests cover:
 Run them, plus shellcheck on `scripts/`, with:
 
 ```sh
-nix flake check -L                                   # sandboxed, as CI does
-nix develop -c python3 -m unittest discover -s tests -v   # quick, in place
+nix run .#test              # your working copy, runs every time
+nix run .#test -- -k gzip   # only tests whose name matches "gzip"
+nix flake check -L          # sandboxed, as CI does; cached (see below)
 ```
 
-The flake only sees files tracked by git, so `git add` new test files before
-running `nix flake check`.
+`nix run .#test` works from any directory inside the repo and also sees
+untracked files. Arguments after `--` go to `python3 -m unittest`.
+
+`nix flake check` runs the same script on a copy of the tracked files in
+`container/`, `scripts/` and `tests/`. Nix caches a passing result, so it only
+reruns when those files, `flake.lock` or the check in `flake.nix` change; a
+second run with nothing changed succeeds immediately and prints no test
+output. New files are invisible to it until you `git add` them. CI starts with
+an empty store, so it always runs the tests.
 
 ## Building locally
 
