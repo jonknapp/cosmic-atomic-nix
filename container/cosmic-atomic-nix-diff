@@ -1,0 +1,154 @@
+#!/usr/bin/python3
+"""Show the package changes between the booted image and a newer one.
+
+`rpm-ostree upgrade --preview` can only list layer changes for container
+images, because the RPM database is inside the layers. This image records its
+package list in /usr/share/cosmic-atomic-nix/packages.tsv and the build copies
+the same list, gzipped and base64-encoded, into an image label. The label is
+part of the image config, so `skopeo inspect` reads it with a few kilobytes of
+download instead of pulling the image.
+
+Usage: cosmic-atomic-nix-diff [IMAGE]
+
+IMAGE defaults to the image the booted deployment follows. It can be given as
+`ghcr.io/owner/repo:tag`, `docker://...`, or an rpm-ostree reference such as
+`ostree-image-signed:docker://...`. The label is informational and is not
+signature-checked here; `rpm-ostree upgrade` still verifies what it installs.
+"""
+
+import base64
+import binascii
+import gzip
+import json
+import subprocess
+import sys
+
+# Must match LABEL in scripts/add-package-label.sh.
+LABEL = "io.github.cosmic-atomic-nix.packages"
+LOCAL_LIST = "/usr/share/cosmic-atomic-nix/packages.tsv"
+
+
+def die(msg):
+    print(f"cosmic-atomic-nix-diff: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def to_skopeo_ref(ref):
+    """Turn an rpm-ostree image reference into a skopeo transport:name."""
+    for prefix in ("ostree-image-signed:", "ostree-unverified-image:"):
+        if ref.startswith(prefix):
+            ref = ref[len(prefix):]
+            break
+    else:
+        if ref.startswith("ostree-unverified-registry:"):
+            ref = "docker://" + ref[len("ostree-unverified-registry:"):]
+        elif ref.startswith("ostree-remote-registry:"):
+            # ostree-remote-registry:REMOTE:registry/repo:tag
+            ref = "docker://" + ref.split(":", 2)[2]
+        elif ref.startswith("ostree-remote-image:"):
+            # ostree-remote-image:REMOTE:transport:name
+            ref = ref.split(":", 2)[2]
+    transports = ("docker://", "containers-storage:", "oci:", "oci-archive:",
+                  "docker-archive:", "dir:")
+    if not ref.startswith(transports):
+        ref = "docker://" + ref
+    return ref
+
+
+def booted_image_ref():
+    try:
+        out = subprocess.run(
+            ["rpm-ostree", "status", "--booted", "--json"],
+            check=True, capture_output=True, text=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as e:
+        die(f"cannot read rpm-ostree status: {e}")
+    for dep in json.loads(out).get("deployments", []):
+        if dep.get("booted"):
+            ref = dep.get("container-image-reference")
+            if not ref:
+                die("the booted deployment is not a container image; "
+                    "pass IMAGE explicitly")
+            return ref
+    die("no booted deployment found; pass IMAGE explicitly")
+
+
+def parse(text):
+    pkgs = {}
+    for line in text.splitlines():
+        if line:
+            name, _, evr = line.partition("\t")
+            pkgs[name] = evr
+    return pkgs
+
+
+def main(argv):
+    if len(argv) > 2 or (len(argv) == 2 and argv[1] in ("-h", "--help")):
+        print(__doc__.strip())
+        return 0 if len(argv) == 2 else 2
+
+    if len(argv) == 2:
+        ref = to_skopeo_ref(argv[1])
+    else:
+        ref = to_skopeo_ref(booted_image_ref())
+        if "@sha256:" in ref:
+            die(f"the booted image is pinned to a digest ({ref}), so it has "
+                "no newer version; pass a tag explicitly")
+
+    try:
+        with open(LOCAL_LIST, encoding="utf-8") as f:
+            local = parse(f.read())
+    except OSError as e:
+        die(f"cannot read the booted package list: {e}")
+
+    try:
+        out = subprocess.run(
+            ["skopeo", "inspect", "--no-tags", ref],
+            check=True, stdout=subprocess.PIPE, text=True,
+        ).stdout
+    except OSError as e:
+        die(f"cannot run skopeo: {e}")
+    except subprocess.CalledProcessError:
+        die(f"skopeo inspect {ref} failed")
+    info = json.loads(out)
+
+    encoded = (info.get("Labels") or {}).get(LABEL)
+    if not encoded:
+        die(f"{ref} has no {LABEL} label (built before package labels "
+            "were added?)")
+    try:
+        remote = parse(gzip.decompress(
+            base64.b64decode(encoded, validate=True)).decode("utf-8"))
+    except (binascii.Error, OSError, EOFError, UnicodeDecodeError) as e:
+        die(f"cannot decode the {LABEL} label: {e}")
+
+    print(f"Image:   {ref}")
+    print(f"Digest:  {info.get('Digest', 'unknown')}")
+    print(f"Created: {info.get('Created', 'unknown')}")
+
+    changed = sorted(n for n in local.keys() & remote.keys()
+                     if local[n] != remote[n])
+    removed = sorted(local.keys() - remote.keys())
+    added = sorted(remote.keys() - local.keys())
+
+    if not (changed or removed or added):
+        print("No package changes.")
+        return 0
+
+    if changed:
+        print(f"Changed ({len(changed)}):")
+        for n in changed:
+            print(f"  {n} {local[n]} -> {remote[n]}")
+    if removed:
+        print(f"Removed ({len(removed)}):")
+        for n in removed:
+            print(f"  {n} {local[n]}")
+    if added:
+        print(f"Added ({len(added)}):")
+        for n in added:
+            print(f"  {n} {remote[n]}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

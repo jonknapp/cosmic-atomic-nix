@@ -166,6 +166,8 @@ the containers stack reads OCI 1.1 referring artifacts.
 - Checks that the private key matches `container/cosign.pub` and that the
   policy inside the image requires a signature for exactly `IMAGE_REPO`
   before anything is pushed.
+- Adds the package list label (see "Checking package changes before
+  upgrading") before the push, so the signature covers it.
 - Pushes to `ghcr.io/<owner>/<repo>`, signs the pushed digest, uploads the
   signature to Rekor, and verifies it.
 - Actions are pinned to commit SHAs and Dependabot (`.github/dependabot.yml`)
@@ -269,6 +271,35 @@ rpm-ostree upgrade
 sudo systemctl reboot
 ```
 
+## Checking package changes before upgrading
+
+For container images, `rpm-ostree upgrade --preview` only lists added and
+removed layers, not package versions: the RPM database is inside the layers,
+and the preview only downloads the manifest. This image works around that:
+
+- The build writes the image's package list (`name.arch<TAB>[epoch:]version-release`)
+  to `/usr/share/cosmic-atomic-nix/packages.tsv`.
+- `scripts/add-package-label.sh` then copies the same list, gzipped and
+  base64-encoded, into the `io.github.cosmic-atomic-nix.packages` image label
+  (about 20–30 KB). Labels live in the image config, so `skopeo inspect`
+  reads them without downloading any layers. The label is added before the
+  push, so it is covered by the signature.
+
+On the host:
+
+```sh
+cosmic-atomic-nix-diff                              # the image the booted deployment follows
+cosmic-atomic-nix-diff ghcr.io/OWNER/REPO:latest    # or any tag
+```
+
+It compares the booted deployment's `packages.tsv` with the label of the
+remote image and prints changed, removed, and added packages. Only the
+manifest and config are downloaded. `skopeo inspect` does not check signatures,
+so treat the output as informational; `rpm-ostree upgrade` still verifies the
+image it installs. Packages layered locally with `rpm-ostree install` are not
+in either list. Images built before this feature have no label and the tool
+says so. If the booted deployment is pinned to a digest, pass a tag.
+
 ## Layout
 
 ```
@@ -284,8 +315,10 @@ container/
   nix.mount                  # bind mount /var/nix -> /nix
   nix-var-dir.service        # create /var/nix at boot
   nix-tmpfiles.conf          # store/profile/gcroots directories
+  cosmic-atomic-nix-diff     # host tool: package diff vs. a newer image
 scripts/
   build.sh                   # build, push, sign locally
+  add-package-label.sh       # copy packages.tsv into an image label
 ```
 
 ## Additional Info

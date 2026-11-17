@@ -82,6 +82,13 @@ jobs:
             --build-arg "IMAGE_REPO=${IMAGE_REPO}" \
             -t "${IMAGE_REPO}:latest" container/
 
+      # Copy the baked package list into an image label so hosts can diff
+      # packages with `cosmic-atomic-nix-diff` (skopeo inspect, no pull).
+      # Must run before the push so the signed digest covers the label.
+      - name: Add package list label
+        run: |
+          scripts/add-package-label.sh "${IMAGE_REPO}:latest"
+
       # The policy inside the image must require a signature for exactly the
       # repository it is published to and trust the signed Quay base image.
       # A mismatch would fall through to the transport-wide insecureAcceptAnything

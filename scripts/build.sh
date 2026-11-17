@@ -40,6 +40,10 @@ sudo podman build --pull=always \
   --build-arg "IMAGE_REPO=${image_repo}" \
   -t "${image}" container/
 
+# Copy the package list into a label for cosmic-atomic-nix-diff. Runs before
+# the push so the signed digest covers the label.
+sudo "$(dirname "$0")/add-package-label.sh" "${image}"
+
 if [[ "${push}" -eq 0 ]]; then
   printf '\nBuilt %s (not pushed or signed)\n' "${image}"
   printf 'Rebase the host with:\n  rpm-ostree rebase ostree-unverified-image:containers-storage:%s\n' "${image}"

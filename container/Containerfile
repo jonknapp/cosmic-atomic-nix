@@ -37,4 +37,19 @@ COPY containers-policy.json merge-policy.py /tmp/policy/
 RUN python3 /tmp/policy/merge-policy.py "${IMAGE_REPO}" /tmp/policy/containers-policy.json && \
     rm -rf /tmp/policy
 
+# Record the image's package list so `cosmic-atomic-nix-diff` can compare the
+# booted deployment with a newer image without pulling it. The same list is
+# copied into an image label after the build (scripts/add-package-label.sh),
+# where `skopeo inspect` can read it from the small config blob. Keep this the
+# last step that can change packages. gpg-pubkey entries are not real
+# packages and would collide on name.arch, so they are left out.
+COPY --chmod=0755 cosmic-atomic-nix-diff /usr/bin/cosmic-atomic-nix-diff
+RUN mkdir -p /usr/share/cosmic-atomic-nix && \
+    rpm -qa --qf '%{NAME}.%{ARCH}\t%{EVR}\n' \
+      | grep -v '^gpg-pubkey\.' \
+      | LC_ALL=C sort > /usr/share/cosmic-atomic-nix/packages.tsv && \
+    test -s /usr/share/cosmic-atomic-nix/packages.tsv && \
+    chmod 0755 /usr/share/cosmic-atomic-nix && \
+    chmod 0644 /usr/share/cosmic-atomic-nix/packages.tsv
+
 RUN bootc container lint
