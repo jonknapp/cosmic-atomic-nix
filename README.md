@@ -177,6 +177,15 @@ the containers stack reads OCI 1.1 referring artifacts.
 - The job needs `bash` (`${VAR,,}` and `<(...)`) and `jq`, both present on
   `ubuntu-latest`.
 
+`.github/workflows/test.yml` runs the tests and shellcheck (`nix flake
+check`, see "Tests") on every push, every pull request, and on demand. It is
+separate from the build: it builds no image, has only `contents: read`, and
+uses no environment or secrets, so running it on pull requests from forks is
+safe. It uses `pull_request`; never change that to `pull_request_target`. A
+new push to the same branch or PR cancels the run in progress. To block
+merging when it fails, make the `test` check required in the branch
+protection rule for `main`.
+
 ## Tests
 
 `tests/test_package_diff.py` covers `cosmic-atomic-nix-diff` and
@@ -364,6 +373,7 @@ reviewed. To install exactly what was checked, rebase to the printed digest:
 
 ```
 .github/workflows/build.yml  # daily + on-demand build, push, sign
+.github/workflows/test.yml   # tests + shellcheck on push and pull request
 .github/dependabot.yml       # PRs to bump the SHA-pinned actions
 flake.nix                    # cosign from nixpkgs, test checks (nix flake check)
 container/

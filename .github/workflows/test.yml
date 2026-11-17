@@ -1,0 +1,38 @@
+name: test
+
+# Tests and shellcheck (`nix flake check`) on every push and pull request.
+# Separate from build.yml: this workflow builds no image and has no access to
+# the signing key or a write token, so it is safe to run on code from forks.
+# Use `pull_request`, never `pull_request_target`, which would run fork code
+# with this repository's token and secrets.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or PR supersedes a running check.
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to the same commit SHAs as build.yml; Dependabot bumps both.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          extra_nix_config: experimental-features = nix-command flakes
+
+      # Runs tests/test_package_diff.py and shellcheck on scripts/ in the Nix
+      # sandbox (see `checks` in flake.nix).
+      - name: Run tests and shellcheck
+        run: nix flake check -L
