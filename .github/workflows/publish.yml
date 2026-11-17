@@ -1,4 +1,4 @@
-name: build
+name: publish
 
 # Only scheduled and manual runs. Never add pull_request_target here: it would
 # run fork-controlled code with access to the signing key.
@@ -12,11 +12,11 @@ permissions:
   packages: write
 
 concurrency:
-  group: build
+  group: publish
   cancel-in-progress: false
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
     # Keep COSIGN_PRIVATE_KEY / COSIGN_PASSWORD in a GitHub Environment named
     # `release` that is restricted to the main branch (Settings > Environments),

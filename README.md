@@ -150,7 +150,7 @@ the containers stack reads OCI 1.1 referring artifacts.
 
 ## CI
 
-`.github/workflows/build.yml` builds, pushes, and signs the image:
+`.github/workflows/publish.yml` builds, pushes, and signs the image:
 
 - Runs daily at 04:00 UTC and on demand (`workflow_dispatch`). It has no
   `pull_request` trigger on purpose: nothing from a fork ever runs with the
@@ -179,7 +179,7 @@ the containers stack reads OCI 1.1 referring artifacts.
 
 `.github/workflows/test.yml` runs the tests and shellcheck (`nix flake
 check`, see "Tests") on every push, every pull request, and on demand. It is
-separate from the build: it builds no image, has only `contents: read`, and
+separate from the publish workflow: it builds no image, has only `contents: read`, and
 uses no environment or secrets, so running it on pull requests from forks is
 safe. It uses `pull_request`; never change that to `pull_request_target`. A
 new push to the same branch or PR cancels the run in progress. To block
@@ -372,7 +372,7 @@ reviewed. To install exactly what was checked, rebase to the printed digest:
 ## Layout
 
 ```
-.github/workflows/build.yml  # daily + on-demand build, push, sign
+.github/workflows/publish.yml # daily + on-demand build, push, sign
 .github/workflows/test.yml   # tests + shellcheck on push and pull request
 .github/dependabot.yml       # PRs to bump the SHA-pinned actions
 flake.nix                    # cosign from nixpkgs, test checks (nix flake check)
