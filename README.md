@@ -290,15 +290,39 @@ On the host:
 ```sh
 cosmic-atomic-nix-diff                              # the image the booted deployment follows
 cosmic-atomic-nix-diff ghcr.io/OWNER/REPO:latest    # or any tag
+nix shell nixpkgs#cosign -c cosmic-atomic-nix-diff  # with signature verification
 ```
 
 It compares the booted deployment's `packages.tsv` with the label of the
 remote image and prints changed, removed, and added packages. Only the
-manifest and config are downloaded. `skopeo inspect` does not check signatures,
-so treat the output as informational; `rpm-ostree upgrade` still verifies the
-image it installs. Packages layered locally with `rpm-ostree install` are not
-in either list. Images built before this feature have no label and the tool
-says so. If the booted deployment is pinned to a digest, pass a tag.
+manifest and config are downloaded. Packages layered locally with
+`rpm-ostree install` are not in either list. Images built before this feature
+have no label and the tool says so. If the booted deployment is pinned to a
+digest, pass a tag.
+
+The label comes from the registry and is treated as untrusted:
+
+- **Signature.** `skopeo inspect` does not check signatures, so if `cosign`
+  is on `PATH` the tool runs
+  `cosign verify --key /etc/pki/containers/cosign.pub REPO@DIGEST` on the
+  digest it inspected, before decoding the label. A failed verification is an
+  error and nothing is shown. Without cosign the diff is still shown but
+  marked `NOT VERIFIED`, with the command to check it by hand. cosign 3 checks
+  the Rekor entry by default, so verification needs network access to
+  Sigstore and caches its trust root in `~/.sigstore`.
+- **Size.** The label may be at most 4 MiB encoded and 8 MiB decompressed
+  (a real one is about 30 KB / 80 KB), so a gzip bomb cannot exhaust memory.
+- **Content.** Every line must match the format `rpm` writes
+  (`name.arch<TAB>[epoch:]version-release`, rpm's allowed characters only);
+  otherwise the whole list is rejected. Other strings from the registry, like
+  the creation date, have non-printable characters escaped, so a forged label
+  cannot inject terminal escape sequences. `add-package-label.sh` applies the
+  same format check at build time.
+
+`rpm-ostree upgrade` follows the tag, so if CI pushes again between the check
+and the upgrade you get a newer (still signed) image than the one you
+reviewed. To install exactly what was checked, rebase to the printed digest:
+`rpm-ostree rebase ostree-image-signed:docker://ghcr.io/OWNER/REPO@sha256:...`.
 
 ## Layout
 

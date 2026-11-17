@@ -30,6 +30,14 @@ if [[ ! -s "${workdir}/packages.tsv" ]]; then
   exit 1
 fi
 
+# Same format check as LINE_RE in container/cosmic-atomic-nix-diff, which
+# rejects the whole list if any line fails it.
+if bad="$(LC_ALL=C grep -Evn $'^[A-Za-z0-9._+^~-]+\t([0-9]+:)?[A-Za-z0-9._+^~]+-[A-Za-z0-9._+^~]+$' \
+    "${workdir}/packages.tsv")"; then
+  printf 'Unexpected package entries in %s:\n%s\n' "${list_path}" "${bad}" >&2
+  exit 1
+fi
+
 # -n leaves the file name and timestamp out of the gzip header, so the same
 # package list always gives the same label.
 encoded="$(gzip -9n < "${workdir}/packages.tsv" | base64 -w0)"
