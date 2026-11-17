@@ -163,6 +163,7 @@ the containers stack reads OCI 1.1 referring artifacts.
 - Installs Nix and builds `.#cosign` from the flake, so the cosign binary is
   the one `flake.lock` pins — the same one `nix develop` gives you locally.
   The store path comes from cache.nixos.org and is signature-checked by Nix.
+- Runs `nix flake check` (see "Tests") before building.
 - Checks that the private key matches `container/cosign.pub` and that the
   policy inside the image requires a signature for exactly `IMAGE_REPO`
   before anything is pushed.
@@ -175,6 +176,33 @@ the containers stack reads OCI 1.1 referring artifacts.
   before merging. The secrets live in the `release` environment (see above).
 - The job needs `bash` (`${VAR,,}` and `<(...)`) and `jq`, both present on
   `ubuntu-latest`.
+
+## Tests
+
+`tests/test_package_diff.py` covers `cosmic-atomic-nix-diff` and
+`scripts/add-package-label.sh`. `skopeo`, `cosign`, `rpm-ostree` and `podman`
+are replaced by fake commands, so no network, registry or container runtime is
+needed. The tests cover:
+
+- the package diff output, including install-only packages like `kernel`;
+- which image is inspected and that cosign verifies exactly the inspected
+  digest, before the label is decoded;
+- the safety checks: failed signatures, gzip bombs, malformed or truncated
+  gzip, invalid digests, invalid package lines, and escape sequences;
+- that the label script writes a deterministic label the diff tool can read,
+  rebuilds with `--pull=never`, and rejects bad lists before building;
+- that the Containerfile, the label script and the diff tool agree on the
+  label name, list path and line format.
+
+Run them, plus shellcheck on `scripts/`, with:
+
+```sh
+nix flake check -L                                   # sandboxed, as CI does
+nix develop -c python3 -m unittest discover -s tests -v   # quick, in place
+```
+
+The flake only sees files tracked by git, so `git add` new test files before
+running `nix flake check`.
 
 ## Building locally
 
@@ -290,7 +318,6 @@ On the host:
 ```sh
 cosmic-atomic-nix-diff                              # the image the booted deployment follows
 cosmic-atomic-nix-diff ghcr.io/OWNER/REPO:latest    # or any tag
-nix shell nixpkgs#cosign -c cosmic-atomic-nix-diff  # with signature verification
 ```
 
 It compares the booted deployment's `packages.tsv` with the label of the
@@ -302,14 +329,23 @@ digest, pass a tag.
 
 The label comes from the registry and is treated as untrusted:
 
-- **Signature.** `skopeo inspect` does not check signatures, so if `cosign`
-  is on `PATH` the tool runs
+- **Signature.** `skopeo inspect` does not check signatures, so the tool runs
   `cosign verify --key /etc/pki/containers/cosign.pub REPO@DIGEST` on the
   digest it inspected, before decoding the label. A failed verification is an
-  error and nothing is shown. Without cosign the diff is still shown but
-  marked `NOT VERIFIED`, with the command to check it by hand. cosign 3 checks
-  the Rekor entry by default, so verification needs network access to
-  Sigstore and caches its trust root in `~/.sigstore`.
+  error and nothing is shown. cosign 3 checks the Rekor entry by default, so
+  verification needs network access to Sigstore and caches its trust root in
+  `~/.sigstore`.
+- **Where cosign comes from.** `cosign` on `PATH` if there is one, otherwise
+  `nix build --no-link --print-out-paths nixpkgs#cosign`. The tool builds and
+  then runs the binary as separate steps, instead of `nix run`, so a Nix
+  failure is never mistaken for a bad signature. The first run downloads
+  nixpkgs and cosign (this takes a while); later runs reuse the Nix store
+  until it is garbage-collected. `nixpkgs#cosign` follows the flake
+  registry's `nixpkgs` (nixpkgs-unstable by default) and is not pinned by
+  this repo's `flake.lock`; it comes from cache.nixos.org, signature-checked
+  by Nix. If neither works (no Nix, offline, build failed), the diff is
+  still shown but marked `NOT VERIFIED`, with the reason and the command to
+  check it by hand.
 - **Size.** The label may be at most 4 MiB encoded and 8 MiB decompressed
   (a real one is about 30 KB / 80 KB), so a gzip bomb cannot exhaust memory.
 - **Content.** Every line must match the format `rpm` writes
@@ -329,7 +365,7 @@ reviewed. To install exactly what was checked, rebase to the printed digest:
 ```
 .github/workflows/build.yml  # daily + on-demand build, push, sign
 .github/dependabot.yml       # PRs to bump the SHA-pinned actions
-flake.nix                    # cosign from nixpkgs (nix run .#cosign, nix develop)
+flake.nix                    # cosign from nixpkgs, test checks (nix flake check)
 container/
   Containerfile              # image definition
   cosign.pub                 # trusted public key (generated, committed)
@@ -343,6 +379,8 @@ container/
 scripts/
   build.sh                   # build, push, sign locally
   add-package-label.sh       # copy packages.tsv into an image label
+tests/
+  test_package_diff.py       # diff tool + label script tests (mocked externals)
 ```
 
 ## Additional Info

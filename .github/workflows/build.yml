@@ -51,6 +51,11 @@ jobs:
           "${out}/bin/cosign" version
           echo "${out}/bin" >> "${GITHUB_PATH}"
 
+      # Tests for the package diff tool and label script, plus shellcheck.
+      # Runs in the Nix sandbox before anything is built or pushed.
+      - name: Run tests
+        run: nix flake check -L
+
       # Verify the upstream base image is signed by Fedora's unofficial Atomic
       # Desktops CI (quay.io/fedora-ostree-desktops), before building on it.
       - name: Verify base image signature

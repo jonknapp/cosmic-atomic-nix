@@ -16,16 +16,17 @@ IMAGE defaults to the image the booted deployment follows. It can be given as
 
 `skopeo inspect` does not check signatures, so the label is only trusted after
 `cosign verify` has checked the inspected digest against
-/etc/pki/containers/cosign.pub. If cosign is on PATH, a failed verification
-is an error and no diff is shown. Without cosign the diff is shown, marked
-NOT VERIFIED. Get cosign through Nix, for example:
-
-  nix shell nixpkgs#cosign -c cosmic-atomic-nix-diff
+/etc/pki/containers/cosign.pub. cosign is taken from PATH or, failing that,
+built with `nix build nixpkgs#cosign` (the first run downloads nixpkgs and
+cosign, later runs reuse the Nix store). A failed verification is an error
+and no diff is shown. If cosign can be found neither way, the diff is shown,
+marked NOT VERIFIED.
 """
 
 import base64
 import binascii
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -36,6 +37,9 @@ import zlib
 LABEL = "io.github.cosmic-atomic-nix.packages"
 LOCAL_LIST = "/usr/share/cosmic-atomic-nix/packages.tsv"
 COSIGN_KEY = "/etc/pki/containers/cosign.pub"
+# Used when cosign is not on PATH. The image's nix.conf enables the
+# nix-command and flakes experimental features this needs.
+NIX_COSIGN = "nixpkgs#cosign"
 
 # A real list is about 80 KB (20-30 KB encoded). The limits only stop a forged
 # label from exhausting memory, e.g. a small gzip that expands to gigabytes.
@@ -149,6 +153,38 @@ def decode_label(encoded):
         die(f"the {LABEL} label contains non-ASCII data")
 
 
+def find_cosign():
+    """Return (path, None), or (None, reason) if cosign is unavailable.
+
+    `nix build` and running the result are separate steps (rather than
+    `nix run`) so a Nix failure is not mistaken for a failed verification.
+    """
+    cosign = shutil.which("cosign")
+    if cosign:
+        return cosign, None
+    nix = shutil.which("nix")
+    if not nix:
+        return None, "cosign not found and nix not available"
+    print(f"cosign is not on PATH; building {NIX_COSIGN} with nix...",
+          file=sys.stderr)
+    try:
+        result = subprocess.run(
+            [nix, "build", "--no-link", "--print-out-paths", NIX_COSIGN],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except OSError as e:
+        return None, f"cannot run nix: {clean(e)}"
+    if result.returncode != 0:
+        tail = result.stderr.strip().splitlines()[-10:]
+        sys.stderr.write("".join(clean(line) + "\n" for line in tail))
+        return None, f"nix build {NIX_COSIGN} failed"
+    for out in result.stdout.split():
+        candidate = os.path.join(out, "bin", "cosign")
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate, None
+    return None, f"nix build {NIX_COSIGN} did not produce bin/cosign"
+
+
 def verify(ref, digest):
     """Check the cosign signature of repo@digest.
 
@@ -157,9 +193,9 @@ def verify(ref, digest):
     """
     if not ref.startswith("docker://"):
         return "not a registry image"
-    cosign = shutil.which("cosign")
+    cosign, reason = find_cosign()
     if not cosign:
-        return "cosign not found"
+        return reason
     target = f"{repository(ref)}@{digest}"
     try:
         result = subprocess.run(
